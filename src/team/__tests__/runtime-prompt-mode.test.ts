@@ -86,6 +86,9 @@ function makeRuntime(cwd: string, agentType: 'gemini' | 'codex' | 'claude'): Tea
     workerPaneIds: [],
     activeWorkers: new Map(),
     cwd,
+    resolvedBinaryPaths: {
+      [agentType]: `/usr/local/bin/${agentType}`,
+    },
   };
 }
 

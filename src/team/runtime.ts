@@ -2,7 +2,7 @@ import { mkdir, writeFile, readFile, rm, rename } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import type { CliAgentType } from './model-contract.js';
-import { buildWorkerArgv, validateCliAvailable, getWorkerEnv as getModelWorkerEnv, isPromptModeAgent, getPromptModeArgs } from './model-contract.js';
+import { buildWorkerArgv, resolveValidatedBinaryPath, getWorkerEnv as getModelWorkerEnv, isPromptModeAgent, getPromptModeArgs } from './model-contract.js';
 import { validateTeamName } from './team-name.js';
 import {
   createTeamSession, spawnWorkerInPane, sendToWorker,
@@ -41,6 +41,8 @@ export interface TeamRuntime {
   workerPaneIds: string[];
   activeWorkers: Map<string, ActiveWorkerState>;
   cwd: string;
+  /** Preflight-validated absolute binary paths, keyed by agent type */
+  resolvedBinaryPaths?: Partial<Record<CliAgentType, string>>;
   stopWatchdog?: () => void;
 }
 
@@ -280,8 +282,19 @@ async function applyDeadPaneTransition(
 
 async function nextPendingTaskIndex(runtime: TeamRuntime): Promise<number | null> {
   const root = stateRoot(runtime.cwd, runtime.teamName);
+  const transientReadRetryAttempts = 3;
+  const transientReadRetryDelayMs = 15;
+
   for (let i = 0; i < runtime.config.tasks.length; i++) {
-    const task = await readTask(root, String(i + 1));
+    const taskId = String(i + 1);
+    let task = await readTask(root, taskId);
+    if (!task) {
+      for (let attempt = 1; attempt < transientReadRetryAttempts; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, transientReadRetryDelayMs));
+        task = await readTask(root, taskId);
+        if (task) break;
+      }
+    }
     if (task?.status === 'pending') return i;
   }
   return null;
@@ -348,9 +361,10 @@ export async function startTeam(config: TeamConfig): Promise<TeamRuntime> {
   const { teamName, agentTypes, tasks, cwd } = config;
   validateTeamName(teamName);
 
-  // Validate CLIs are available
+  // Validate CLIs once and pin absolute binary paths for consistent spawn behavior.
+  const resolvedBinaryPaths: Partial<Record<CliAgentType, string>> = {};
   for (const agentType of [...new Set(agentTypes)]) {
-    validateCliAvailable(agentType);
+    resolvedBinaryPaths[agentType] = resolveValidatedBinaryPath(agentType);
   }
 
   const root = stateRoot(cwd, teamName);
@@ -401,6 +415,7 @@ export async function startTeam(config: TeamConfig): Promise<TeamRuntime> {
     workerPaneIds: session.workerPaneIds, // initially empty []
     activeWorkers: new Map(),
     cwd,
+    resolvedBinaryPaths,
   };
 
   const maxConcurrentWorkers = agentTypes.length;
@@ -676,10 +691,17 @@ export async function spawnWorkerForTask(
   const relInboxPath = `.omc/state/team/${runtime.teamName}/workers/${workerNameValue}/inbox.md`;
 
   const envVars = getModelWorkerEnv(runtime.teamName, workerNameValue, agentType);
+  const resolvedBinaryPath = runtime.resolvedBinaryPaths?.[agentType] ?? resolveValidatedBinaryPath(agentType);
+  if (!runtime.resolvedBinaryPaths) {
+    runtime.resolvedBinaryPaths = {};
+  }
+  runtime.resolvedBinaryPaths[agentType] = resolvedBinaryPath;
+
   const [launchBinary, ...launchArgs] = buildWorkerArgv(agentType, {
     teamName: runtime.teamName,
     workerName: workerNameValue,
     cwd: runtime.cwd,
+    resolvedBinaryPath,
   });
 
   // For prompt-mode agents (e.g. Gemini Ink TUI), pass instruction via CLI

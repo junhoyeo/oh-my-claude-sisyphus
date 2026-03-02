@@ -22,6 +22,11 @@ export interface WorkerLaunchConfig {
   model?: string;
   cwd: string;
   extraFlags?: string[];
+  /**
+   * Optional pre-validated absolute CLI binary path.
+   * Used by runtime preflight validation to ensure spawns are pinned.
+   */
+  resolvedBinaryPath?: string;
 }
 
 /** @deprecated Backward-compat shim for older team API consumers. */
@@ -267,6 +272,11 @@ export function validateCliAvailable(agentType: CliAgentType): void {
   }
 }
 
+export function resolveValidatedBinaryPath(agentType: CliAgentType): string {
+  const contract = getContract(agentType);
+  return resolveCliBinaryPath(contract.binary);
+}
+
 export function buildLaunchArgs(agentType: CliAgentType, config: WorkerLaunchConfig): string[] {
   return getContract(agentType).buildLaunchArgs(config.model, config.extraFlags);
 }
@@ -274,7 +284,12 @@ export function buildLaunchArgs(agentType: CliAgentType, config: WorkerLaunchCon
 export function buildWorkerArgv(agentType: CliAgentType, config: WorkerLaunchConfig): string[] {
   validateTeamName(config.teamName);
   const contract = getContract(agentType);
-  const binary = resolveBinaryPath(contract.binary);
+  const binary = config.resolvedBinaryPath
+    ? (() => {
+        validateBinaryRef(config.resolvedBinaryPath);
+        return config.resolvedBinaryPath;
+      })()
+    : resolveBinaryPath(contract.binary);
   const args = buildLaunchArgs(agentType, config);
   return [binary, ...args];
 }

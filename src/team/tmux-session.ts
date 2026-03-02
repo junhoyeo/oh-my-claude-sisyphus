@@ -119,6 +119,7 @@ function getLaunchWords(config: WorkerPaneConfig): string[] {
 export function buildWorkerStartCommand(config: WorkerPaneConfig): string {
   const shell = getDefaultShell();
   const launchWords = getLaunchWords(config);
+  const shouldSourceRc = process.env.OMC_TEAM_NO_RC !== '1';
 
   if (process.platform === 'win32' && !isUnixLikeOnWindows()) {
     const envPrefix = Object.entries(config.envVars)
@@ -142,7 +143,7 @@ export function buildWorkerStartCommand(config: WorkerPaneConfig): string {
 
     const shellName = shellNameFromPath(shell) || 'bash';
     const rcFile = process.env.HOME ? `${process.env.HOME}/.${shellName}rc` : '';
-    const script = rcFile
+    const script = shouldSourceRc && rcFile
       ? `[ -f ${shellEscape(rcFile)} ] && . ${shellEscape(rcFile)}; exec "$@"`
       : 'exec "$@"';
 
@@ -167,7 +168,7 @@ export function buildWorkerStartCommand(config: WorkerPaneConfig): string {
   const shellName = shellNameFromPath(shell) || 'bash';
   const rcFile = process.env.HOME ? `${process.env.HOME}/.${shellName}rc` : '';
   // Quote rcFile to prevent shell injection if HOME contains metacharacters
-  const sourceCmd = rcFile ? `[ -f "${rcFile}" ] && source "${rcFile}"; ` : '';
+  const sourceCmd = shouldSourceRc && rcFile ? `[ -f "${rcFile}" ] && source "${rcFile}"; ` : '';
 
   return `env ${envString} ${shell} -c "${sourceCmd}exec ${launchWords[0]}"`;
 }
